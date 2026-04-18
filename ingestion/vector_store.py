@@ -11,7 +11,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from config import settings
-from chunking import Chunk
+from ingestion.chunking import Chunk
 
 logger = logging.getLogger(__name__)
 

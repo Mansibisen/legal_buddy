@@ -12,8 +12,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from PIL import Image
 import pdf2image
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.auto import partition
+from pypdf import PdfReader
 import pytesseract
 
 from config import settings
@@ -38,111 +37,72 @@ class MarkerPDFParser(PDFParser):
         self.name = "marker"
         self.max_pages = settings.MAX_PAGES
         
+class MarkerPDFParser(PDFParser):
+    """
+    Uses PyPDF for PDF text extraction
+    """
+    
+    def __init__(self):
+        self.name = "marker"
+        self.max_pages = settings.MAX_PAGES
+        
     def parse(self, pdf_path: str) -> Dict[str, Any]:
         """
-        Parse PDF using Marker with markdown preservation
+        Parse PDF using PyPDF
         """
         try:
-            logger.info(f"Parsing PDF with Marker: {pdf_path}")
+            logger.info(f"Parsing PDF with PyPDF: {pdf_path}")
             
-            # Use unstructured library (which can use marker backend)
-            elements = partition_pdf(
-                pdf_path,
-                languages=["en"],
-                strategy="hi_res",  # High resolution parsing
-                extract_image_block_types=["Image", "Figure"],
-                infer_table_structure=True,
-            )
+            pdf_reader = PdfReader(pdf_path)
+            text_content = ""
             
-            return self._process_elements(elements, pdf_path)
+            # Extract text from each page
+            for page_num, page in enumerate(pdf_reader.pages[:self.max_pages]):
+                text_content += f"\n--- Page {page_num + 1} ---\n"
+                text_content += page.extract_text()
+            
+            return {
+                "text_content": text_content,
+                "pages": len(pdf_reader.pages),
+                "metadata": {
+                    "source": pdf_path,
+                    "parser": self.name,
+                }
+            }
             
         except Exception as e:
-            logger.error(f"Error parsing PDF with Marker: {e}")
+            logger.error(f"Error parsing PDF with PyPDF: {e}")
             raise
-
-    def _process_elements(self, elements: List, pdf_path: str) -> Dict[str, Any]:
-        """Process unstructured elements into organized content"""
-        content = {
-            "text_content": "",
-            "sections": [],
-            "images": [],
-            "tables": [],
-            "metadata": {
-                "source": pdf_path,
-                "parser": self.name,
-            }
-        }
-        
-        current_section = None
-        
-        for element in elements:
-            element_type = type(element).__name__
-            
-            if element_type in ["Title", "Heading"]:
-                if current_section:
-                    content["sections"].append(current_section)
-                current_section = {
-                    "title": str(element),
-                    "content": "",
-                    "subsections": []
-                }
-                
-            elif element_type == "NarrativeText":
-                if current_section is not None:
-                    current_section["content"] += str(element) + "\n"
-                else:
-                    content["text_content"] += str(element) + "\n"
-                    
-            elif element_type == "Table":
-                table_data = {
-                    "html": element.metadata.text_as_html if hasattr(element.metadata, "text_as_html") else str(element),
-                    "text": str(element)
-                }
-                content["tables"].append(table_data)
-                
-            elif element_type == "Image":
-                image_data = {
-                    "source": str(element),
-                    "description": ""
-                }
-                content["images"].append(image_data)
-                
-        if current_section:
-            content["sections"].append(current_section)
-            
-        return content
 
 
 class UnstructuredPDFParser(PDFParser):
     """
-    Uses Unstructured.io library for PDF parsing
-    Good for general document processing
+    Alternative PDF parser using PyPDF
     """
     
     def __init__(self):
         self.name = "unstructured"
         
     def parse(self, pdf_path: str) -> Dict[str, Any]:
-        """Parse PDF using Unstructured library"""
+        """Parse PDF using PyPDF"""
         try:
-            logger.info(f"Parsing PDF with Unstructured: {pdf_path}")
+            logger.info(f"Parsing PDF with PyPDF: {pdf_path}")
             
-            elements = partition(
-                pdf_path,
-                include_page_breaks=True,
-                strategy="hi_res",
-            )
+            pdf_reader = PdfReader(pdf_path)
+            text_content = ""
             
-            content = {
-                "text_content": "\n".join([str(e) for e in elements]),
-                "elements": [str(e) for e in elements],
+            for page_num, page in enumerate(pdf_reader.pages):
+                text_content += f"\n--- Page {page_num + 1} ---\n"
+                text_content += page.extract_text()
+            
+            return {
+                "text_content": text_content,
+                "pages": len(pdf_reader.pages),
                 "metadata": {"source": pdf_path, "parser": self.name}
             }
             
-            return content
-            
         except Exception as e:
-            logger.error(f"Error parsing PDF with Unstructured: {e}")
+            logger.error(f"Error parsing PDF with PyPDF: {e}")
             raise
 
 

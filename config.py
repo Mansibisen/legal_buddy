@@ -4,7 +4,7 @@ Configuration for Multi-Modal Legal System
 import os
 from pathlib import Path
 from typing import Optional
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings"""
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     SECTION_AWARE_CHUNKING: bool = True  # Use semantic chunking
     
     # PDF Processing
-    PDF_EXTRACTION_METHOD: str = "marker"  # Options: "marker", "unstructured", "pypdf"
+    PDF_EXTRACTION_METHOD: str = "unstructured"  # Options: "marker", "unstructured", "pypdf"
     MAX_PAGES: int = 500  # Max pages to process per document
     EXTRACT_IMAGES: bool = True  # Extract and process images
     

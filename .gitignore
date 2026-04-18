@@ -1,0 +1,5 @@
+__pycache__/
+chroma_db_legal/
+ingestion/__pycache__/
+=retriever/__pycache__/
+selfCorrection/__pycache__/

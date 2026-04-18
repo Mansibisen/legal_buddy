@@ -5,7 +5,7 @@ Connects the retrieval pipeline with the ingestion and API layers
 import logging
 from typing import List, Dict, Any, Optional
 
-from retriever import (
+from retriever.retriever import (
     HybridRetriever,
     RetrievedDocument,
     SearchMethod,

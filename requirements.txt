@@ -1,55 +1,66 @@
-# Core LLM & Embeddings
+# ============================================================================
+# Core LLM & Orchestration
+# ============================================================================
 langchain>=0.1.0
 langchain-core>=0.1.0
 langchain-community>=0.1.0
-langchain_openai>=0.1.0
-langchain_chroma>=0.1.0
-langchain_text_splitters>=0.1.0
-openai>=1.3.0
+langchain-openai>=0.1.0
+langchain-chroma>=0.1.0
+langchain-text-splitters>=0.1.0
+langgraph>=0.1.0
+langsmith>=0.1.0
+openai>=2.0.0
 
-# Vector Database
-chromadb>=1.4.0
+# ============================================================================
+# Vector Database & Storage
+# ============================================================================
+chromadb>=0.3.0
 
-# PDF Processing & Multi-Modal
-pypdf>=3.17.0
+# ============================================================================
+# PDF Processing & Multi-Modal Support
+# ============================================================================
+pypdf>=3.0.0
 PyPDF2>=3.0.0
-unstructured[pdf,image]>=0.10.0
-pdf2image>=1.16.3
-pillow>=10.0.0
+pdf2image>=1.16.0
 pytesseract>=0.3.10
-marker-pdf>=0.3.0
 
-# Document Processing
+# ============================================================================
+# Document Processing & Parsing
+# ============================================================================
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 python-docx>=0.8.11
 
-# Vision & Image Processing
+# ============================================================================
+# Computer Vision & Image Processing
+# ============================================================================
 opencv-python>=4.8.0
 numpy>=1.24.0
 scikit-image>=0.21.0
 
-# Utilities
-python-dotenv>=1.0.0
-requests>=2.31.0
+# ============================================================================
+# Configuration & Environment
+# ============================================================================
 pydantic>=2.0.0
-tqdm>=4.66.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
 
-# Data Handling
+# ============================================================================
+# Web Framework & API
+# ============================================================================
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# ============================================================================
+# Data Processing & Analysis
+# ============================================================================
 pandas>=2.0.0
 polars>=0.19.0
 
-# CLI & Async
+# ============================================================================
+# Utilities & Helpers
+# ============================================================================
+requests>=2.31.0
+tqdm>=4.66.0
 click>=8.1.0
-asyncio>=3.4.3
-
-# Web Framework (optional, for API)
-fastapi>=0.100.0
-uvicorn>=0.23.0
-flask>=2.3.0
-
-# Logging & Monitoring
-python-logging-loki>=0.3.2
-
-# Type Hints
-typing-extensions>=4.8.0

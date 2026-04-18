@@ -19,11 +19,11 @@ import json
 from tqdm import tqdm
 
 from config import settings
-from pdf_parser import parse_pdf, ImageExtractor
-from vision_processor import process_document_images
-from text_cleaner import clean_document
-from chunking import chunk_document, HybridChunker
-from vector_store import VectorStore
+from ingestion.pdf_parser import parse_pdf, ImageExtractor
+from ingestion.vision_processor import process_document_images
+from ingestion.text_cleaner import clean_document
+from ingestion.chunking import chunk_document, HybridChunker
+from ingestion.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
