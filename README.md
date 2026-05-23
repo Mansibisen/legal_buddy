@@ -216,6 +216,10 @@ Our system provides an intelligent chatbot that:
 - Quick example prompts
 - Markdown rendering with syntax highlighting
 
+**Interface Preview:**
+
+![Multi-Modal Legal Chatbot UI](./data/Screenshot%202026-05-23%20at%208.28.11%20PM.png)
+
 ---
 
 ## ✨ Key Features
