@@ -218,7 +218,7 @@ Our system provides an intelligent chatbot that:
 
 **Interface Preview:**
 
-![Multi-Modal Legal Chatbot UI](./data/Screenshot%202026-05-23%20at%208.28.11%20PM.png)
+![Multi-Modal Legal Chatbot UI](./data/Screenshot%202026-05-23%20at%208.28.11%E2%80%AFPM.png)
 
 ---
 
