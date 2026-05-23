@@ -6,7 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
-from openai import OpenAI
+from langchain_ollama import OllamaLLM
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +22,21 @@ class GradeScore(Enum):
 class DocumentGrader:
     """
     Grades whether retrieved documents answer the user's question
-    Uses Claude/GPT-4 to perform intelligent relevance assessment
+    Uses Llama to perform intelligent relevance assessment
     """
     
-    def __init__(self, model: str = "gpt-4-turbo"):
+    def __init__(self, model: str = None):
         """
         Initialize document grader
         
         Args:
             model: LLM model to use for grading
         """
-        self.client = OpenAI()
-        self.model = model
+        self.model = model or settings.OLLAMA_MODEL
+        self.client = OllamaLLM(
+            model=self.model,
+            base_url=settings.OLLAMA_BASE_URL
+        )
         
     def grade_document(
         self,
@@ -56,14 +60,7 @@ class DocumentGrader:
         prompt = self._build_grading_prompt(question, document, context)
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,  # Low temperature for consistent grading
-                max_tokens=500,
-            )
-            
-            response_text = response.choices[0].message.content
+            response_text = self.client.invoke(prompt)
             
             # Parse response
             result = self._parse_grade_response(response_text, question, document)
@@ -71,14 +68,10 @@ class DocumentGrader:
             return result
             
         except Exception as e:
-            logger.error(f"Error grading document: {e}")
-            return {
-                "grade": GradeScore.IRRELEVANT.value,
-                "score": 0.0,
-                "reasoning": f"Grading error: {str(e)}",
-                "question": question,
-                "document_preview": document[:200]
-            }
+            logger.error(f"Error grading document with LLM: {e}")
+            # Fallback to keyword matching when LLM is unavailable
+            logger.info("Falling back to keyword-based grading")
+            return self._grade_by_keywords(question, document)
     
     def grade_documents(
         self,
@@ -148,33 +141,48 @@ class DocumentGrader:
         document: str,
         context: Optional[str] = None
     ) -> str:
-        """Build grading prompt"""
-        prompt = f"""You are an expert legal document grader. Your task is to assess whether 
-a retrieved document answers a user's question about a legal contract or agreement.
+        """Build grading prompt with improved clarity"""
+        prompt = f"""You are a legal document grader. Your task is to determine if a document is relevant to a question.
 
 QUESTION: {question}
 
-DOCUMENT: {document}
+DOCUMENT:
+{document}
 """
         
         if context:
             prompt += f"\nCONTEXT: {context}\n"
         
         prompt += """
-Please grade this document on the following scale:
-- RELEVANT: The document clearly answers the question or provides the information needed
-- PARTIAL: The document partially addresses the question but lacks some details
-- IRRELEVANT: The document does not answer the question
+GRADING TASK:
+Is the document relevant to answering the question? 
 
-Respond in JSON format:
+A document is RELEVANT if:
+- It contains information that directly answers the question
+- It discusses the topic mentioned in the question
+- It provides details about what the question asks about
+
+A document is IRRELEVANT if:
+- It doesn't contain any information related to the question topic
+- It's about a completely different legal topic
+
+RESPOND WITH ONLY THIS FORMAT (no extra text):
 {
-  "grade": "RELEVANT|PARTIAL|IRRELEVANT",
-  "score": <0.0-1.0>,
-  "reasoning": "<brief explanation>",
-  "key_phrases": ["<phrases from document that answer the question>"],
-  "missing_info": "<any missing information if partial>"
+  "grade": "RELEVANT",
+  "score": 0.9,
+  "reasoning": "brief explanation"
 }
-"""
+
+Or:
+
+{
+  "grade": "IRRELEVANT", 
+  "score": 0.1,
+  "reasoning": "brief explanation"
+}
+
+Remember: Be generous with RELEVANT. If there is ANY connection between the question and document, mark as RELEVANT."""
+        
         return prompt
     
     def _parse_grade_response(
@@ -183,20 +191,41 @@ Respond in JSON format:
         question: str,
         document: str
     ) -> Dict[str, Any]:
-        """Parse grader response"""
+        """Parse grader response with improved error handling and keyword fallback"""
         import json
         import re
+        
+        logger.info(f"Raw LLM response (first 500 chars): {response[:500]}")
+        
+        grade_data = None
+        parse_error = None
         
         try:
             # Extract JSON from response
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
-                grade_data = json.loads(json_match.group())
+                try:
+                    grade_data = json.loads(json_match.group())
+                    logger.info(f"Successfully parsed JSON: {grade_data}")
+                except json.JSONDecodeError as e:
+                    parse_error = str(e)
+                    logger.warning(f"JSON parsing error: {e}. Response was: {response[:200]}...")
             else:
-                grade_data = {}
-            
+                logger.warning("No JSON found in response, attempting keyword parsing")
+        except Exception as e:
+            parse_error = str(e)
+            logger.warning(f"Regex/extraction error: {e}")
+        
+        # If we couldn't parse JSON, try text-based parsing
+        if not grade_data:
+            logger.info("Using text-based response parsing")
+            grade_data = self._parse_response_by_keywords(response, question, document)
+            if parse_error:
+                grade_data["reasoning"] = f"Parse error ({parse_error}). Used text parsing: {grade_data.get('reasoning', '')}"
+        
+        try:
             # Normalize grade
-            grade_raw = grade_data.get("grade", "IRRELEVANT").upper()
+            grade_raw = grade_data.get("grade", "IRRELEVANT").upper() if grade_data else "IRRELEVANT"
             if "RELEVANT" in grade_raw and "PARTIAL" not in grade_raw:
                 grade = GradeScore.RELEVANT.value
             elif "PARTIAL" in grade_raw:
@@ -204,25 +233,162 @@ Respond in JSON format:
             else:
                 grade = GradeScore.IRRELEVANT.value
             
+            logger.info(f"LLM grade before override: {grade}")
+            
+            # AGGRESSIVE OVERRIDE: If LLM says irrelevant but ANY keywords match, use keyword-based grading
+            if grade == GradeScore.IRRELEVANT.value:
+                keyword_match = self._check_keyword_match(question, document)
+                logger.info(f"Keyword match ratio: {keyword_match['match_ratio']:.2f}, matched: {keyword_match['matched_keywords']}")
+                
+                if keyword_match["match_ratio"] > 0.0:  # Changed from 0.5 to 0.0 - any match overrides
+                    logger.info(f"OVERRIDING: LLM said IRRELEVANT, but keywords match. Using keyword-based grade.")
+                    # Use keyword-based grading instead
+                    return self._grade_by_keywords(question, document)
+            
             return {
                 "grade": grade,
-                "score": float(grade_data.get("score", 0.0)),
-                "reasoning": grade_data.get("reasoning", ""),
-                "key_phrases": grade_data.get("key_phrases", []),
-                "missing_info": grade_data.get("missing_info", ""),
+                "score": float(grade_data.get("score", 0.0) if grade_data else 0.0),
+                "reasoning": grade_data.get("reasoning", "") if grade_data else "Text-based grading",
+                "key_phrases": grade_data.get("key_phrases", []) if grade_data else [],
+                "missing_info": grade_data.get("missing_info", "") if grade_data else "",
                 "question": question,
                 "document_preview": document[:300]
             }
             
         except Exception as e:
-            logger.error(f"Error parsing grade response: {e}")
+            logger.error(f"Error normalizing grade response: {e}")
+            # Last resort: keyword matching
+            logger.info("Using keyword fallback due to normalization error")
+            keyword_match = self._check_keyword_match(question, document)
+            if keyword_match["match_ratio"] > 0.0:
+                grade = GradeScore.PARTIALLY_RELEVANT.value
+            else:
+                grade = GradeScore.IRRELEVANT.value
+            
             return {
-                "grade": GradeScore.IRRELEVANT.value,
-                "score": 0.0,
-                "reasoning": f"Parse error: {str(e)}",
+                "grade": grade,
+                "score": keyword_match["match_ratio"],
+                "reasoning": f"Error fallback, used keyword matching: {', '.join(keyword_match['matched_keywords'])}",
                 "question": question,
                 "document_preview": document[:300]
             }
+    
+    def _parse_response_by_keywords(
+        self,
+        response: str,
+        question: str,
+        document: str
+    ) -> Dict[str, Any]:
+        """Parse response by looking for keywords when JSON parsing fails"""
+        response_lower = response.lower()
+        
+        # Look for grade keywords in response
+        relevant_count = response_lower.count("relevant")
+        partial_count = response_lower.count("partial") + response_lower.count("somewhat") + response_lower.count("partially")
+        irrelevant_count = response_lower.count("irrelevant") + response_lower.count("not relevant")
+        
+        # Determine grade based on keyword presence
+        if relevant_count > irrelevant_count and relevant_count > 0 and partial_count == 0:
+            grade = "RELEVANT"
+            score = 0.8
+        elif partial_count > 0 or (relevant_count > 0 and irrelevant_count > 0):
+            grade = "PARTIAL"
+            score = 0.6
+        elif irrelevant_count > relevant_count and irrelevant_count > 0:
+            grade = "IRRELEVANT"
+            score = 0.2
+        else:
+            # If we can't determine, default to checking keywords in document
+            grade = "IRRELEVANT"
+            score = 0.2
+        
+        # Extract first 100 chars of response as reasoning
+        reasoning = response[:100].replace("\n", " ") if response else "Text-based parsing"
+        
+        return {
+            "grade": grade,
+            "score": score,
+            "reasoning": f"Parsed from response: {reasoning}..."
+        }
+    
+    def _check_keyword_match(
+        self,
+        question: str,
+        document: str
+    ) -> Dict[str, Any]:
+        """Check if question keywords appear in document with fuzzy matching"""
+        import re
+        
+        # Extract meaningful keywords from question (length > 3)
+        question_words = re.findall(r'\b\w{4,}\b', question.lower())
+        question_words = [w for w in question_words if len(w) > 3]
+        
+        # Remove common stop words that aren't meaningful
+        stop_words = {'what', 'when', 'where', 'which', 'that', 'this', 'from', 'with', 'have', 'does', 'will', 'would', 'could', 'should'}
+        question_words = [w for w in question_words if w not in stop_words]
+        
+        if not question_words:
+            return {"match_ratio": 0.0, "matched_keywords": [], "total_keywords": 0}
+        
+        doc_lower = document.lower()
+        matched = []
+        
+        # Check for exact and partial matches
+        for word in question_words:
+            if word in doc_lower:
+                matched.append(word)
+            else:
+                # Check for word stems (e.g., "limit" matches "limitation")
+                # Look for the word as a substring or stem
+                for stem_len in range(len(word) - 1, max(3, len(word) - 3), -1):
+                    stem = word[:stem_len]
+                    if stem in doc_lower and len(stem) >= 4:
+                        matched.append(f"{word} (matched as '{stem}')")
+                        break
+        
+        match_ratio = len(matched) / len(question_words) if question_words else 0
+        
+        return {
+            "match_ratio": match_ratio,
+            "matched_keywords": matched,
+            "total_keywords": len(question_words),
+            "missing_keywords": [w for w in question_words if w not in matched]
+        }
+    
+    def _grade_by_keywords(
+        self,
+        question: str,
+        document: str
+    ) -> Dict[str, Any]:
+        """Grade document using simple keyword matching (fallback method)"""
+        import re
+        
+        keyword_match = self._check_keyword_match(question, document)
+        match_ratio = keyword_match["match_ratio"]
+        matched_keywords = keyword_match["matched_keywords"]
+        
+        # Determine grade based on keyword match ratio
+        if match_ratio >= 0.75:
+            grade = GradeScore.RELEVANT.value
+            score = 0.8
+        elif match_ratio >= 0.5:
+            grade = GradeScore.PARTIALLY_RELEVANT.value
+            score = 0.6
+        elif match_ratio >= 0.25:
+            grade = GradeScore.PARTIALLY_RELEVANT.value
+            score = 0.4
+        else:
+            grade = GradeScore.IRRELEVANT.value
+            score = 0.2
+        
+        return {
+            "grade": grade,
+            "score": score,
+            "reasoning": f"Keyword matching ({match_ratio*100:.0f}% match): {', '.join(matched_keywords) if matched_keywords else 'no keywords matched'}",
+            "key_phrases": matched_keywords,
+            "question": question,
+            "document_preview": document[:300]
+        }
 
 
 class DocumentRelevanceValidator:

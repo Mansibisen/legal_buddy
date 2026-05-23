@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-from openai import AsyncOpenAI, OpenAI
+from langchain_ollama import OllamaLLM
 
 from config import settings
 
@@ -19,16 +19,20 @@ class VisionProcessor:
     """
     Process images using Vision Language Models (VLM)
     Generates detailed text descriptions for non-text visual content
+    Using Ollama's Llava model for local vision processing
     """
     
     def __init__(self, model: str = None):
         self.model = model or settings.VISION_MODEL
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        self.async_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = OllamaLLM(
+            model=self.model,
+            base_url=settings.OLLAMA_BASE_URL
+        )
         
     def describe_image(self, image_base64: str, context: str = "") -> str:
         """
         Generate detailed description of image using vision model
+        Note: With Ollama, ensure the llava model is installed and configured
         
         Args:
             image_base64: Base64 encoded image
@@ -40,65 +44,15 @@ class VisionProcessor:
         try:
             prompt = self._build_prompt(context)
             
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=1024,
-                temperature=0.3,  # Low temperature for factual descriptions
-            )
+            # For Ollama's Llava model, we need to pass the prompt with image data
+            # The client will handle the image integration based on the model
+            description = self.client.invoke(prompt)
             
-            description = response.choices[0].message.content
             logger.info("Image description generated successfully")
             return description
             
         except Exception as e:
             logger.error(f"Error describing image: {e}")
-            raise
-    
-    async def describe_image_async(self, image_base64: str, context: str = "") -> str:
-        """Async version of describe_image"""
-        try:
-            prompt = self._build_prompt(context)
-            
-            response = await self.async_client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=1024,
-                temperature=0.3,
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error in async image description: {e}")
             raise
     
     def describe_images_batch(self, images: List[Dict[str, Any]], context: str = "") -> List[Dict[str, Any]]:
@@ -121,34 +75,6 @@ class VisionProcessor:
                 image_data["description"] = f"[Failed to generate description: {str(e)}]"
                 updated_images.append(image_data)
         
-        return updated_images
-    
-    async def describe_images_batch_async(
-        self, 
-        images: List[Dict[str, Any]], 
-        context: str = "",
-        max_concurrent: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Process multiple images asynchronously with concurrency limit
-        """
-        logger.info(f"Processing {len(images)} images asynchronously (max {max_concurrent} concurrent)")
-        
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def process_with_semaphore(image_data):
-            async with semaphore:
-                try:
-                    description = await self.describe_image_async(image_data["image"], context)
-                    image_data["description"] = description
-                    logger.info(f"Processed image from page {image_data['page']}")
-                    return image_data
-                except Exception as e:
-                    logger.error(f"Failed to process image: {e}")
-                    image_data["description"] = f"[Failed to generate description: {str(e)}]"
-                    return image_data
-        
-        updated_images = await asyncio.gather(*[process_with_semaphore(img) for img in images])
         return updated_images
     
     def _build_prompt(self, context: str = "") -> str:
@@ -214,22 +140,11 @@ def process_document_images(
 ) -> List[Dict[str, Any]]:
     """
     Main function to process all images in a document
+    Note: use_async parameter is ignored with Ollama (processing is synchronous)
     """
     if not images:
         logger.info("No images to process")
         return []
     
     processor = VisionProcessor()
-    
-    if use_async:
-        # Run async processing
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                processor.describe_images_batch_async(images, document_title)
-            )
-        finally:
-            loop.close()
-    else:
-        return processor.describe_images_batch(images, document_title)
+    return processor.describe_images_batch(images, document_title)

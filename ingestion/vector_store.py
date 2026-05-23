@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
@@ -32,10 +32,10 @@ class VectorStore:
         self.collection_name = collection_name or settings.CHROMA_COLLECTION_NAME
         self.path = path or settings.CHROMA_DB_PATH
         
-        # Initialize embeddings
-        self.embeddings = OpenAIEmbeddings(
+        # Initialize embeddings using Ollama
+        self.embeddings = OllamaEmbeddings(
             model=settings.EMBEDDING_MODEL,
-            api_key=settings.OPENAI_API_KEY
+            base_url=settings.OLLAMA_BASE_URL
         )
         
         # Initialize vector store
@@ -79,8 +79,6 @@ class VectorStore:
                 logger.error(f"Error adding batch: {e}")
                 raise
         
-        # Persist to disk
-        self.vector_store.persist()
         logger.info(f"Added {len(doc_ids)} documents total")
         
         return doc_ids
@@ -183,7 +181,6 @@ class VectorStore:
             for doc_id in document_ids:
                 self.vector_store.delete([doc_id])
             
-            self.vector_store.persist()
             logger.info(f"Deleted {len(document_ids)} documents")
             return True
             
@@ -208,7 +205,6 @@ class VectorStore:
         try:
             collection = self.vector_store._collection
             collection.delete(where={})  # Delete all documents
-            self.vector_store.persist()
             logger.info("Cleared collection")
             return True
         except Exception as e:

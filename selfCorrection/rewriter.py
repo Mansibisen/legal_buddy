@@ -6,7 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
-from openai import OpenAI
+from langchain_ollama import OllamaLLM
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +26,18 @@ class QueryRewriter:
     Rewrites and improves queries that failed to retrieve relevant documents
     """
     
-    def __init__(self, model: str = "gpt-4-turbo"):
+    def __init__(self, model: str = None):
         """
         Initialize query rewriter
         
         Args:
             model: LLM model to use for rewriting
         """
-        self.client = OpenAI()
-        self.model = model
+        self.model = model or settings.OLLAMA_MODEL
+        self.client = OllamaLLM(
+            model=self.model,
+            base_url=settings.OLLAMA_BASE_URL
+        )
     
     def rewrite_query(
         self,
@@ -65,14 +69,7 @@ class QueryRewriter:
         )
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,  # Moderate temperature for creative rewriting
-                max_tokens=500,
-            )
-            
-            response_text = response.choices[0].message.content
+            response_text = self.client.invoke(prompt)
             
             # Parse response
             result = self._parse_rewrite_response(response_text, original_query)

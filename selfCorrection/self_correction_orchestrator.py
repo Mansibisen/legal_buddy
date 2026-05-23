@@ -170,37 +170,30 @@ class SelfCorrectionOrchestrator:
         start_time = time.time()
         
         try:
-            if self.graph:
-                # Use LangGraph execution
-                logger.info("Executing workflow via LangGraph")
-                final_state = self.graph.invoke(
-                    state,
-                    config={
-                        "retriever_fn": retriever_fn,
-                        "grader_fn": grader_fn,
-                        "rewriter_fn": rewriter_fn,
-                        "generator_fn": generator_fn,
-                        "hallucination_checker_fn": hallucination_checker_fn
-                    }
-                )
-            else:
-                # Fallback manual orchestration
-                logger.info("Executing workflow via manual orchestration")
-                final_state = self._execute_manual_workflow(
-                    state,
-                    retriever_fn,
-                    grader_fn,
-                    rewriter_fn,
-                    generator_fn,
-                    hallucination_checker_fn,
-                    initial_documents
-                )
-            
+            # NOTE: LangGraph implementation doesn't properly integrate with callback functions
+            # Always use manual orchestration for now
+            logger.info("Executing workflow via manual orchestration")
+            final_state = self._execute_manual_workflow(
+                state,
+                retriever_fn,
+                grader_fn,
+                rewriter_fn,
+                generator_fn,
+                hallucination_checker_fn,
+                initial_documents
+            )
             final_state.total_time = time.time() - start_time
             return final_state
             
         except Exception as e:
             logger.error(f"Workflow execution error: {e}")
+            # Ensure we always return a proper SelfCorrectionWorkflowState object
+            if not isinstance(state, SelfCorrectionWorkflowState):
+                state = SelfCorrectionWorkflowState(
+                    question=question,
+                    original_query=question,
+                    current_query=question
+                )
             state.workflow_complete = True
             state.success = False
             state.total_time = time.time() - start_time
@@ -227,52 +220,75 @@ class SelfCorrectionOrchestrator:
         else:
             state.retrieved_documents = retriever_fn(state.current_query) or []
         state.retrieval_time = time.time() - start
+        logger.info(f"Retrieved {len(state.retrieved_documents)} documents on first attempt")
         
         # Retry loop
         max_retries = state.max_attempts
         for attempt in range(max_retries):
             state.attempt_count = attempt + 1
             
-            # Step 2: Grade documents
-            logger.info(f"Attempt {state.attempt_count}: Grading documents")
-            start = time.time()
-            state.grade_assessment = grader_fn(state.question, state.retrieved_documents) or {}
-            state.grading_time = time.time() - start
-            state.relevant_count = state.grade_assessment.get("relevant_count", 0)
-            state.relevant_documents = state.grade_assessment.get("relevant_documents", [])
+            # Step 2: Grade documents (only if we have documents)
+            if not state.retrieved_documents:
+                logger.warning(f"Attempt {state.attempt_count}: No documents to grade")
+                state.grade_assessment = {
+                    "relevant_count": 0,
+                    "total_documents": 0,
+                    "relevant_documents": [],
+                    "feedback": "No documents retrieved"
+                }
+                state.relevant_count = 0
+                state.relevant_documents = []
+            else:
+                logger.info(f"Attempt {state.attempt_count}: Grading {len(state.retrieved_documents)} documents")
+                start = time.time()
+                state.grade_assessment = grader_fn(state.question, state.retrieved_documents) or {}
+                state.grading_time = time.time() - start
+                state.relevant_count = state.grade_assessment.get("relevant_count", 0)
+                state.relevant_documents = state.grade_assessment.get("relevant_documents", [])
+                logger.info(f"Grading complete: {state.relevant_count} relevant out of {len(state.retrieved_documents)}")
             
             # Check if we have enough relevant documents
             if state.relevant_count > 0:
-                logger.info(f"Found {state.relevant_count} relevant documents")
+                logger.info(f"Found {state.relevant_count} relevant documents. Breaking retry loop.")
                 break
             
             # Step 3: Rewrite query if documents not relevant
             if attempt < max_retries - 1:
-                logger.info(f"Rewriting query (attempt {state.attempt_count}/{max_retries})")
+                logger.info(f"No relevant documents found. Rewriting query (attempt {state.attempt_count}/{max_retries})")
                 start = time.time()
                 rewrite_result = rewriter_fn(
                     state.current_query,
-                    f"No relevant documents found. Try: {state.grade_assessment.get('feedback', '')}"
+                    f"No relevant documents found. Current attempt returned {len(state.retrieved_documents)} documents. Try: {state.grade_assessment.get('feedback', 'improve query')}"
                 ) or {}
                 state.rewriting_time = time.time() - start
                 
+                old_query = state.current_query
                 state.current_query = rewrite_result.get("rewritten_query", state.current_query)
                 state.rewrite_history.append(rewrite_result)
+                logger.info(f"Query rewritten from '{old_query}' to '{state.current_query}'")
                 
                 # Step 4: Retrieve with new query
                 logger.info(f"Retrieving with rewritten query: {state.current_query}")
                 start = time.time()
                 state.retrieved_documents = retriever_fn(state.current_query) or []
                 state.retrieval_time = time.time() - start
+                logger.info(f"Retrieved {len(state.retrieved_documents)} documents with rewritten query")
+            else:
+                logger.warning(f"Max retries ({max_retries}) reached. No relevant documents found after {attempt + 1} attempts.")
         
-        # Step 5: Generate answer
-        logger.info("Generating answer")
+        # Step 5: Generate answer (even with no relevant documents, but set appropriate answer)
+        logger.info(f"Generating answer with {len(state.relevant_documents)} relevant documents")
         start = time.time()
-        state.answer = generator_fn(
-            state.question,
-            state.relevant_documents
-        ) or ""
+        if state.relevant_documents:
+            state.answer = generator_fn(
+                state.question,
+                state.relevant_documents
+            ) or ""
+        else:
+            logger.warning("No relevant documents available. Generating answer from empty context.")
+            state.answer = "I was unable to find relevant documents to answer your question. Please try rephrasing your question or providing more context."
         state.generation_time = time.time() - start
+        logger.info(f"Answer generated: {state.answer[:100] if state.answer else 'None'}...")
         
         # Step 6: Check for hallucinations
         logger.info("Checking answer for hallucinations")
@@ -282,10 +298,12 @@ class SelfCorrectionOrchestrator:
             state.relevant_documents
         ) or {}
         state.is_hallucinating = state.hallucination_assessment.get("is_hallucinating", False)
+        logger.info(f"Hallucination check complete: is_hallucinating={state.is_hallucinating}")
         
         # Step 7: Finalize
         state.workflow_complete = True
-        state.success = not state.is_hallucinating and state.relevant_count > 0
+        state.success = state.relevant_count > 0 and not state.is_hallucinating
+        logger.info(f"Workflow finalized. Success={state.success}, RelevantDocs={state.relevant_count}, Hallucinating={state.is_hallucinating}")
         
         return state
     

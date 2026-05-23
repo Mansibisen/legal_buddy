@@ -422,4 +422,4 @@ with col1:
 with col2:
     st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 with col3:
-    st.caption("💡 Powered by LangChain & OpenAI")
+    st.caption("💡 Powered by LangChain & Ollama (Local Llama2)")

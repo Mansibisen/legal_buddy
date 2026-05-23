@@ -166,6 +166,14 @@ class SelfCorrectionResponse(BaseModel):
     timestamp: str = ""
 
 
+class ChatMessageRequest(BaseModel):
+    """Chat message request"""
+    question: str
+    session_id: str = "default"
+    max_attempts: int = 3
+    check_hallucinations: bool = True
+
+
 
 # ==================== Initialization ====================
 
@@ -753,73 +761,97 @@ async def get_collection_stats():
 # ==================== Chat Endpoints ====================
 
 @app.post("/chat/message")
-async def chat_message(
-    question: str,
-    session_id: str = "default",
-    max_attempts: int = 3,
-    check_hallucinations: bool = True
-):
+async def chat_message(request: ChatMessageRequest):
     """
     Main chat endpoint for legal questions
     Orchestrates full self-correction workflow
+    
+    Args:
+        request: ChatMessageRequest with question and options
     """
     try:
-        logger.info(f"Chat message from {session_id}: {question}")
+        logger.info(f"Chat message from {request.session_id}: {request.question}")
         
         # Define wrapper functions for orchestrator
         def retriever_fn(query):
             try:
+                logger.info(f"Retriever function called with query: {query}")
                 results = retrieval_engine.search_with_method(
                     query,
-                    search_method="HYBRID",
+                    method="hybrid",
                     k=5
                 )
-                return [r.get("content", "") for r in results.get("results", [])]
+                if not results:
+                    logger.warning(f"No results from retrieval engine for query: {query}")
+                    return []
+                
+                docs = [r.get("content", "") for r in results] if isinstance(results, list) else []
+                logger.info(f"Retrieved {len(docs)} documents. First doc length: {len(docs[0]) if docs else 0} chars")
+                return docs
             except Exception as e:
-                logger.error(f"Retrieval error: {e}")
+                logger.error(f"Retrieval error: {e}", exc_info=True)
                 return []
         
         def grader_fn(q, docs):
             try:
+                logger.info(f"Grader function called with {len(docs)} documents")
                 result = document_grader.grade_documents(q, docs)
-                relevant = sum(1 for r in result if r.get("grade") == "RELEVANT")
+                
+                # Count RELEVANT and PARTIAL as relevant
+                relevant = sum(1 for r in result if r.get("grade", "").upper() in ["RELEVANT", "PARTIAL"])
+                logger.info(f"Detailed grades: {[r.get('grade') for r in result]}")
+                logger.info(f"Grading complete: {relevant} relevant out of {len(docs)}")
+                
+                # Extract relevant documents (keep original document text, not just preview)
+                relevant_docs = []
+                for i, grading_result in enumerate(result):
+                    if grading_result.get("grade", "").upper() in ["RELEVANT", "PARTIAL"]:
+                        # Use original full document, not just the preview
+                        relevant_docs.append(docs[i])
+                
                 return {
                     "relevant_count": relevant,
                     "total_documents": len(docs),
-                    "relevant_documents": [r for r in result if r.get("grade") == "RELEVANT"],
+                    "relevant_documents": relevant_docs,
                     "feedback": f"Found {relevant} relevant documents out of {len(docs)}"
                 }
             except Exception as e:
-                logger.error(f"Grading error: {e}")
-                return {"relevant_count": 0, "total_documents": len(docs)}
+                logger.error(f"Grading error: {e}", exc_info=True)
+                return {"relevant_count": 0, "total_documents": len(docs), "relevant_documents": []}
         
         def rewriter_fn(orig_query, reason):
             try:
+                logger.info(f"Rewriter function called. Original query: {orig_query}, Reason: {reason}")
                 result = query_rewriter.rewrite_query(orig_query, reason)
+                logger.info(f"Query rewritten: {result.get('rewritten_query', orig_query)}")
                 return result
             except Exception as e:
-                logger.error(f"Rewriting error: {e}")
+                logger.error(f"Rewriting error: {e}", exc_info=True)
                 return {"rewritten_query": orig_query}
         
         def generator_fn(q, docs):
             try:
+                logger.info(f"Generator function called with question: {q}, doc_count: {len(docs)}")
                 result = answer_generator.generate_answer(q, docs)
+                logger.info(f"Answer generated: {result.answer_text[:100] if result.answer_text else 'None'}")
                 return result.answer_text
             except Exception as e:
-                logger.error(f"Generation error: {e}")
+                logger.error(f"Generation error: {e}", exc_info=True)
                 return "Unable to generate answer"
         
         def hallucination_fn(q, ans, docs):
             try:
+                logger.info(f"Hallucination checker called for answer length: {len(ans) if ans else 0}")
                 result = hallucination_checker.check_hallucination(q, ans, docs)
+                logger.info(f"Hallucination check complete: {result}")
                 return result
             except Exception as e:
-                logger.error(f"Hallucination check error: {e}")
+                logger.error(f"Hallucination check error: {e}", exc_info=True)
                 return {"is_hallucinating": False, "hallucination_level": "unknown"}
         
         # Run workflow
         workflow_state = orchestrator.execute_workflow(
-            question,
+            request.question,
             retriever_fn,
             grader_fn,
             rewriter_fn,
@@ -827,7 +859,13 @@ async def chat_message(
             hallucination_fn
         )
         
-        return {
+        logger.info(f"Workflow completed. Success: {workflow_state.success}, Answer: {workflow_state.answer[:50] if workflow_state.answer else 'None'}")
+        
+        # Ensure all values are JSON-serializable
+        relevant_docs = workflow_state.relevant_documents or []
+        sources = [str(doc) for doc in relevant_docs[:3]] if relevant_docs else []
+        
+        response = {
             "success": workflow_state.success,
             "answer": workflow_state.answer or "Unable to generate answer",
             "citations": [
@@ -836,27 +874,32 @@ async def chat_message(
                     "page": None,
                     "confidence": 0.8
                 }
-                for i in range(min(5, len(workflow_state.relevant_documents)))
+                for i in range(min(5, len(relevant_docs)))
             ],
-            "sources": workflow_state.relevant_documents[:3],
+            "sources": sources,
             "metrics": {
-                "total_attempts": workflow_state.attempt_count,
-                "retrieval_time": workflow_state.retrieval_time,
-                "grading_time": workflow_state.grading_time,
-                "rewriting_time": workflow_state.rewriting_time,
-                "generation_time": workflow_state.generation_time,
-                "total_time": workflow_state.total_time
+                "total_attempts": int(workflow_state.attempt_count),
+                "retrieval_time": float(workflow_state.retrieval_time),
+                "grading_time": float(workflow_state.grading_time),
+                "rewriting_time": float(workflow_state.rewriting_time),
+                "generation_time": float(workflow_state.generation_time),
+                "total_time": float(workflow_state.total_time)
             },
-            "session_id": session_id
+            "session_id": request.session_id
         }
         
+        logger.info(f"Chat response prepared successfully")
+        return response
+        
     except Exception as e:
+        import traceback
         logger.error(f"Chat error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "success": False,
             "error": str(e),
             "answer": "An error occurred while processing your question.",
-            "session_id": session_id
+            "session_id": request.session_id
         }
 
 

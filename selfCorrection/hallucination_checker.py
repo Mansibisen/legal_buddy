@@ -6,7 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
-from openai import OpenAI
+from langchain_ollama import OllamaLLM
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +26,18 @@ class HallucinationChecker:
     Prevents model from inventing legal information
     """
     
-    def __init__(self, model: str = "gpt-4-turbo"):
+    def __init__(self, model: str = None):
         """
         Initialize hallucination checker
         
         Args:
             model: LLM model to use for validation
         """
-        self.client = OpenAI()
-        self.model = model
+        self.model = model or settings.OLLAMA_MODEL
+        self.client = OllamaLLM(
+            model=self.model,
+            base_url=settings.OLLAMA_BASE_URL
+        )
     
     def check_hallucination(
         self,
@@ -64,14 +68,7 @@ class HallucinationChecker:
         )
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,  # Low temp for consistency
-                max_tokens=1000,
-            )
-            
-            response_text = response.choices[0].message.content
+            response_text = self.client.invoke(prompt)
             result = self._parse_hallucination_response(response_text)
             
             return {
@@ -135,14 +132,7 @@ class HallucinationChecker:
         prompt = self._build_claim_extraction_prompt(answer, source_documents)
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=1000,
-            )
-            
-            response_text = response.choices[0].message.content
+            response_text = self.client.invoke(prompt)
             return self._parse_claim_validation(response_text)
             
         except Exception as e:

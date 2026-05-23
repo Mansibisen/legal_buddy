@@ -9,14 +9,14 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings"""
     
-    # API Keys
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
+    # Ollama Model Configuration
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama2")  # Local Llama model
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")  # Ollama server URL
     
     # Vector Store Configuration
     CHROMA_DB_PATH: str = "./chroma_db_legal"
     CHROMA_COLLECTION_NAME: str = "legal_documents"
-    EMBEDDING_MODEL: str = "text-embedding-3-small"  # OpenAI embedding model
+    EMBEDDING_MODEL: str = "all-minilm"  # Local embedding model (can be changed based on available models)
     
     # Document Processing
     CHUNK_SIZE: int = 1024  # Characters per chunk
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     EXTRACT_IMAGES: bool = True  # Extract and process images
     
     # Vision Model Configuration
-    VISION_MODEL: str = "gpt-4o-mini"  # OpenAI vision model
+    VISION_MODEL: str = "llava"  # Local Llama Vision model (requires llava variant)
     VISION_ENABLED: bool = True
     IMAGE_COMPRESSION_QUALITY: int = 85
     IMAGE_MAX_DIMENSION: int = 2048

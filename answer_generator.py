@@ -7,7 +7,8 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
-from openai import OpenAI
+from langchain_ollama import OllamaLLM
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +71,18 @@ class MultiModalAnswerGenerator:
     Generates comprehensive answers with text, images, and citations
     """
     
-    def __init__(self, model: str = "gpt-4-turbo"):
+    def __init__(self, model: str = None):
         """
         Initialize answer generator
         
         Args:
-            model: LLM model to use
+            model: LLM model to use (defaults to config OLLAMA_MODEL)
         """
-        self.client = OpenAI()
-        self.model = model
+        self.model = model or settings.OLLAMA_MODEL
+        self.client = OllamaLLM(
+            model=self.model,
+            base_url=settings.OLLAMA_BASE_URL
+        )
     
     def generate_answer(
         self,
@@ -116,14 +120,7 @@ class MultiModalAnswerGenerator:
         )
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,  # Low temperature for factuality
-                max_tokens=1500,
-            )
-            
-            answer_text = response.choices[0].message.content
+            answer_text = self.client.invoke(prompt)
             
             # Extract citations
             citations = self._extract_citations(
@@ -187,14 +184,7 @@ ANSWER:
 """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000,
-            )
-            
-            answer = response.choices[0].message.content
+            answer = self.client.invoke(prompt)
             
             return {
                 "answer": answer,
@@ -246,14 +236,7 @@ ANSWER:
 """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=1500,
-            )
-            
-            answer_text = response.choices[0].message.content
+            answer_text = self.client.invoke(prompt)
             
             # Create multi-modal answer
             return MultiModalAnswer(
